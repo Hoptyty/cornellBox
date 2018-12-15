@@ -12,11 +12,11 @@ using namespace std;
 /** global variables**/
 double kEps = 0.0000001;
 double kd = 1.0;
-double ls = 100.0;
+double ls = 40.0;
 double invPI = 1/M_PI;
 int max_depth = 10;
-bool separate = true;
-int sample_per_pixel = 100;
+bool separate = false;
+int sample_per_pixel = 1024;
 /**
  * Vec3 object
  **/
@@ -118,7 +118,7 @@ struct Rectangle {
 		als = a.dot(a);
 		bls = b.dot(b);
 		material = m;
-		cout << n << endl;
+		//cout << n << endl;
 	}
 
 	bool hit(Ray & ray, double & tmin) const {
@@ -167,9 +167,9 @@ Vec3 color_multiply(Vec3 c1, Vec3 c2) {
 }
 
 Vec3 clamp(Vec3 & color) {
-	color.x = max(0,min(255,int(color.x)));
-	color.y = max(0,min(255,int(color.y)));
-	color.z = max(0,min(255,int(color.z)));
+	color.x = max(0,min(255,(int)(color.x)));
+	color.y = max(0,min(255,(int)(color.y)));
+	color.z = max(0,min(255,(int)(color.z)));
 	return color;
 }
 
@@ -258,10 +258,13 @@ Vec3 trace_ray(const Ray ray, const int depth, Vec3 pt, int idx) {
 		return Vec3(0,0,0);
 	}
 	else {
+		//cout << "im here with depth: " << depth << endl;
 		Vec3 wi;
 		Vec3 wo = ray.d * (-1);
 		float pdf;
 		Vec3 f = sample_f(wo, wi, pdf, pt, idx);
+		//if (idx == 1)
+		//cout << f << endl;
 		float ndotwi = recs[idx].n.dot(wi);
 		Ray reflected_ray(pt, wi);
 		Vec3 next_hit;
@@ -288,18 +291,19 @@ Vec3 trace_ray(const Ray ray, const int depth, Vec3 pt, int idx) {
 		else {
 			if (next_idx == 0) {
 				if (depth == 1 && separate) {
-					cout << "hit light at depth 1 again!" << endl;
+					//cout << "hit light at depth 1 again!" << endl;
 					return Vec3(0,0,0);
 				}
 				else {
-					cout << "i'm the indirect light! (depth: " << depth << endl;
+					//cout << "i'm the indirect light! (depth: " << depth << endl;
 					return recs[0].material * ls;
 				}
 			}
 			next_hit = reflected_ray.getPt(t);
 		}
-
-		return color_multiply(f, trace_ray(reflected_ray, depth + 1, next_hit, next_idx)) * ndotwi / pdf;
+		Vec3 next_color = trace_ray(reflected_ray, depth + 1, next_hit, next_idx);
+		Vec3 result = color_multiply(f, next_color) * ndotwi / pdf;
+		return result;
 	}
 }
 
@@ -421,13 +425,17 @@ int main() {
 
 	for (int y = vp.h-1; y >= 0; y--) {
 		for (int x = 0; x < vp.w; x++) {
+			//cout << "working on x:" << x << " y:" << y << endl;
 			Vec3 pixel_value = Vec3(0,0,0);
 			for (int i = 0; i < sample_per_pixel; i++) {
 				ray.o = eye;
-				ray.d = vp.getPixelCenter(x + samples[2*i]-0.5,y+samples[2*i+1]-0.5,-eye.z);
+				if (sample_per_pixel == 1)
+					ray.d = vp.getPixelCenter(x,y,-eye.z);
+				else
+					ray.d = vp.getPixelCenter(x + samples[2*i]-0.5,y+samples[2*i+1]-0.5,-eye.z);
 				ray.d = u * ray.d.x + v * ray.d.y - w * ray.d.z;
 				ray.d = ray.d / ray.d.len();
-				//cout << x << "," << y << "," << ray.d << endl;
+				//cout << samples[2*i] << endl;
 
 				vector<double> t_arr;
 				for (int i = 0; i < recs.size(); i++) {
@@ -448,6 +456,7 @@ int main() {
 				else {
 					Vec3 pt = ray.getPt(t);
 					if (separate) {
+						//cout << "not here" << endl;
 						if (idx == 0) {
 							pixel_value = pixel_value + recs[idx].material;
 						}
@@ -461,17 +470,22 @@ int main() {
 					}
 					else {
 						if (idx == 0)
-							img << recs[idx].material << endl;
+							pixel_value = pixel_value + recs[idx].material;
 						else {
-
+							Vec3 temp = trace_ray(ray, 0, pt, idx);
+							pixel_value = pixel_value + temp;
 						}
 					}
 
 					/** without shading **/
 					//img << recs[idx].material << endl;
 				}
+				// if (pixel_value.x != 0 || pixel_value.y != 0 || pixel_value.z != 0)
+				// cout << pixel_value << ", " << idx<< endl;
 			}
 			pixel_value = pixel_value / sample_per_pixel;
+			//cout << pixel_value << endl;
+			//cout << max(0,min(255, (int)(pixel_value.x))) << endl;
 			clamp(pixel_value);
 			img << pixel_value << endl;
 		}
