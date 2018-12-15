@@ -15,8 +15,10 @@ double kd = 1.0;
 double ls = 40.0;
 double invPI = 1/M_PI;
 int max_depth = 10;
-bool separate = false;
-int sample_per_pixel = 1024;
+bool separate = true;
+int sample_per_pixel = 100;
+int area_light_num_rays = 100;
+int ray_count = 0; //ray counter
 /**
  * Vec3 object
  **/
@@ -203,6 +205,7 @@ Vec3 area_light_shade(Vec3 pt, int idx, int num_rays) {
 	double rec_area = recs[0].a.len() * recs[0].b.len();
 	//cout << rec_area << endl;
 	for (int i = 0; i < num_rays; i++) {
+		ray_count ++;
 		Vec3 sample = recs[0].p0 + recs[0].a * drand48() + recs[0].b * drand48();
 		Vec3 wi = sample - pt;
 		double d = wi.len();
@@ -252,24 +255,23 @@ Vec3 sample_f(const Vec3& wo, Vec3& wi, float& pdf, Vec3 pt, int idx) {
 	return recs[idx].material * kd * invPI;
 }
 
-Vec3 trace_ray(const Ray ray, const int depth, Vec3 pt, int idx) {
-	//cout << depth << endl;
-	if (depth > max_depth) {
-		return Vec3(0,0,0);
+Vec3 path_shade(const Ray ray, const int depth, Vec3 pt, int idx) {
+	Vec3 L = Vec3(0,0,0);
+	if (depth == 0 && separate) {
+		L = area_light_shade(pt, idx, area_light_num_rays);
 	}
+	Vec3 wi;
+	Vec3 wo = ray.d * (-1);
+	float pdf;
+	Vec3 f = sample_f(wo, wi, pdf, pt, idx);
+	float ndotwi = recs[idx].n.dot(wi);
+	Ray reflected_ray(pt, wi);
+	if (depth + 1 > max_depth)
+		return L;
 	else {
-		//cout << "im here with depth: " << depth << endl;
-		Vec3 wi;
-		Vec3 wo = ray.d * (-1);
-		float pdf;
-		Vec3 f = sample_f(wo, wi, pdf, pt, idx);
-		//if (idx == 1)
-		//cout << f << endl;
-		float ndotwi = recs[idx].n.dot(wi);
-		Ray reflected_ray(pt, wi);
+		ray_count ++;
 		Vec3 next_hit;
 		int next_idx;
-
 		vector<double> t_arr;
 		for (int i = 0; i < recs.size(); i++) {
 			double t;
@@ -284,32 +286,37 @@ Vec3 trace_ray(const Ray ray, const int depth, Vec3 pt, int idx) {
 		next_idx = it - t_arr.begin();
 		double t = t_arr[next_idx];
 
-		if (t == DBL_MAX) {
-			//cout << depth << ", escaped!" << endl;
-			return Vec3(0,0,0);
-		}
-		else {
+		if (t != DBL_MAX) {
+			//hit an object
 			if (next_idx == 0) {
-				if (depth == 1 && separate) {
-					//cout << "hit light at depth 1 again!" << endl;
-					return Vec3(0,0,0);
+				//emissive
+				if (depth == 0 && separate) {
+					return L;
 				}
 				else {
-					//cout << "i'm the indirect light! (depth: " << depth << endl;
-					return recs[0].material * ls;
+					L = L + color_multiply(f, recs[0].material * ls) * ndotwi / pdf;
+					return L;
 				}
 			}
-			next_hit = reflected_ray.getPt(t);
+			else {
+				//matt
+				next_hit = reflected_ray.getPt(t);
+				L = L + color_multiply(f, path_shade(reflected_ray, depth + 1, next_hit, next_idx)) * ndotwi / pdf;
+				return L;
+			}
 		}
-		Vec3 next_color = trace_ray(reflected_ray, depth + 1, next_hit, next_idx);
-		Vec3 result = color_multiply(f, next_color) * ndotwi / pdf;
-		return result;
+		else {
+			//escape scene
+			return L;
+		}
 	}
 }
 
 
 
 int main() {
+	clock_t startTime = clock();
+
 	Vec3 eye = Vec3(278,273,-800);
 	Vec3 dir = Vec3(0,0,1);
 	Vec3 up = Vec3(0,1,0);
@@ -428,6 +435,7 @@ int main() {
 			//cout << "working on x:" << x << " y:" << y << endl;
 			Vec3 pixel_value = Vec3(0,0,0);
 			for (int i = 0; i < sample_per_pixel; i++) {
+				ray_count ++;
 				ray.o = eye;
 				if (sample_per_pixel == 1)
 					ray.d = vp.getPixelCenter(x,y,-eye.z);
@@ -458,22 +466,18 @@ int main() {
 					if (separate) {
 						//cout << "not here" << endl;
 						if (idx == 0) {
-							pixel_value = pixel_value + recs[idx].material;
+							pixel_value = pixel_value + recs[idx].material * ls;
 						}
 						else {
-							Vec3 L = area_light_shade(pt,idx,100);
-							Vec3 indirect = trace_ray(ray, 1, pt, idx);
-							L = L + indirect;
 							//cout << indirect << endl;
-							pixel_value = pixel_value + L;
+							pixel_value = pixel_value + path_shade(ray, 0, pt, idx);;
 						}
 					}
 					else {
 						if (idx == 0)
-							pixel_value = pixel_value + recs[idx].material;
+							pixel_value = pixel_value + recs[idx].material * ls;
 						else {
-							Vec3 temp = trace_ray(ray, 0, pt, idx);
-							pixel_value = pixel_value + temp;
+							pixel_value = pixel_value + path_shade(ray, 0, pt, idx);
 						}
 					}
 
@@ -490,5 +494,6 @@ int main() {
 			img << pixel_value << endl;
 		}
 	}
+	cout << (double)(clock() - startTime) / (CLOCKS_PER_SEC) << " seconds, " << ray_count << " rays" << endl;
 	return 0;
 }
