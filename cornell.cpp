@@ -240,8 +240,9 @@ Vec3 sample_f(const Vec3& wo, Vec3& wi, float& pdf, Vec3 pt, int idx) {
 	v = v / v.len();
 	Vec3 u = v.cross(w);
 
-	float cos_phi = cos(2 * M_PI * drand48());
-	float sin_phi = sin(2 * M_PI * drand48());
+	double x = drand48();
+	float cos_phi = cos(2 * M_PI * x);
+	float sin_phi = sin(2 * M_PI * x);
 	float cos_theta = 1.0 - drand48();
 	float sin_theta = sqrt(1.0 - cos_theta * cos_theta);
 	float pu = sin_theta * cos_phi;
@@ -413,7 +414,7 @@ int main() {
 	Vec3 p0_15 = Vec3(423.0,0.0,246.0);
 	recs.push_back(Rectangle(p0_15,a15,b15, Vec3(255,255,255)));
 
-	Viewport vp = Viewport(576,576,1);	
+	Viewport vp = Viewport(288,288,2);	
 	ofstream img ("picture.ppm");
 
 	img << "P3" << endl;
