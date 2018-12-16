@@ -17,7 +17,7 @@ double ls = 40.0;
 double invPI = 1/M_PI;
 int max_depth = 10;
 bool separate = true;
-int sample_per_pixel = 1024;
+int sample_per_pixel = 10000;
 int area_light_num_rays = 100;
 /**
  * Vec3 object
@@ -294,14 +294,14 @@ Vec3 path_shade(const Ray ray, const int depth, Vec3 pt, int idx, long long& ray
 					return L;
 				}
 				else {
-					L = L + color_multiply(f, recs[0].material * 10) * ndotwi / pdf;
+					L = L + color_multiply(f, recs[0].material * 20) * ndotwi/pdf;
 					return L;
 				}
 			}
 			else {
 				//matt
 				next_hit = reflected_ray.getPt(t);
-				L = L + color_multiply(f, path_shade(reflected_ray, depth + 1, next_hit, next_idx, ray_count)) * ndotwi / pdf;
+				L = L + color_multiply(f, path_shade(reflected_ray, depth + 1, next_hit, next_idx, ray_count)) * ndotwi /pdf;
 				return L;
 			}
 		}
@@ -390,8 +390,8 @@ int main() {
 	recs.push_back(Rectangle(p0_11,a11,b11, Vec3(255,255,255)));
 
 	//tall block left
-	Vec3 a12 = Vec3(50.0,0.0,160.0);
-	Vec3 b12 = Vec3(0.0,330.0,0.0);
+	Vec3 b12 = Vec3(50.0,0.0,160.0);
+	Vec3 a12 = Vec3(0.0,330.0,0.0);
 	Vec3 p0_12 = Vec3(423.0,0.0,246.0);
 	recs.push_back(Rectangle(p0_12,a12,b12, Vec3(255,255,255)));
 
@@ -402,8 +402,8 @@ int main() {
 	recs.push_back(Rectangle(p0_13,a13,b13, Vec3(255,255,255)));
 
 	//tall block right
-	Vec3 a14 = Vec3(-50.0,0.0,-160.0);
-	Vec3 b14 = Vec3(0.0,330.0,0.0);
+	Vec3 b14 = Vec3(-50.0,0.0,-160.0);
+	Vec3 a14 = Vec3(0.0,330.0,0.0);
 	Vec3 p0_14 = Vec3(313.0,0.0,456.0);
 	recs.push_back(Rectangle(p0_14,a14,b14, Vec3(255,255,255)));
 
@@ -413,7 +413,7 @@ int main() {
 	Vec3 p0_15 = Vec3(423.0,0.0,246.0);
 	recs.push_back(Rectangle(p0_15,a15,b15, Vec3(255,255,255)));
 
-	Viewport vp = Viewport(576,576,2);	
+	Viewport vp = Viewport(576,576,1);	
 	ofstream img ("picture.ppm");
 
 	img << "P3" << endl;
@@ -457,16 +457,17 @@ int main() {
 			
 			if (t != DBL_MAX) {
 				if (idx == 0)
-					pixel_value = recs[0].material;
+					pixel_value = recs[0].material * ls;
 				else {
 					Vec3 pt = ray.getPt(t);
+					ray_count += area_light_num_rays;
 					pixel_value = area_light_shade(pt,idx,area_light_num_rays);
 				}
 			}
 
 			Vec3 temp = Vec3(0,0,0);
 			for (int k = 0; k < sample_per_pixel; k++) {
-			// 	ray_count ++;
+				ray_count ++;
 			// 	cout << ray_count << " " << x << " " << y << " " << k << endl;
 				
 				ray.o = eye;
@@ -528,6 +529,7 @@ int main() {
 			img << pixel_value << endl;
 		}
 	}
+	cout << ray_count << endl;
 	//cout << (double)(clock() - startTime) / (CLOCKS_PER_SEC) << " seconds, " << ray_count << " rays" << endl;
 	return 0;
 }
