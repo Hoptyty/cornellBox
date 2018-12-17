@@ -11,14 +11,16 @@
 using namespace std;
 
 /** global variables**/
-double kEps = 0.0000001;
+double kEps = 0.001;
 double kd = 1.0;
 double ls = 40.0;
 double invPI = 1/M_PI;
 int max_depth = 10;
 bool separate = true;
-int sample_per_pixel = 10000;
+int sample_per_pixel = 100;
 int area_light_num_rays = 100;
+int M = 256;
+int N = 64;
 /**
  * Vec3 object
  **/
@@ -157,8 +159,21 @@ struct Viewport {
 	}
 };
 
+struct Irradiance {
+	Vec3 p;
+	Vec3 n;
+	Vec3 E;
+	float R;
+	Irradiance(Vec3 a, Vec3 b, Vec3 c) {
+		p = a;
+		n = b;
+		E = c;
+	}
+};
+
 vector<Rectangle> recs;
 vector<double> samples;
+vector<Irradiance> cache;
 
 Vec3 color_multiply(Vec3 c1, Vec3 c2) {
 	Vec3 res = Vec3(0,0,0);
@@ -255,6 +270,27 @@ Vec3 sample_f(const Vec3& wo, Vec3& wi, float& pdf, Vec3 pt, int idx) {
 	return recs[idx].material * kd * invPI;
 }
 
+Vec3 sample_f(const Vec3& wo, Vec3& wi, float& pdf, Vec3 pt, int idx, int j, int k) {
+	Vec3 w = recs[idx].n;
+	Vec3 v = Vec3(0.0021, 1.0, 0.0031).cross(w);
+	v = v / v.len();
+	Vec3 u = v.cross(w);
+ 	float x = drand48();
+	float y = drand48();
+	float cos_phi = cos(2 * M_PI / M * (j + x));
+	float sin_phi = sin(2 * M_PI / M * (j + x));
+	float cos_theta = 1.0 - 1.0 / N * (k + y);
+	float sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+	float pu = sin_theta * cos_phi;
+	float pv = sin_theta * sin_phi;
+	float pw = cos_theta;
+	wi = u * pu + v * pv + w * pw;
+	wi = wi / wi.len();
+	//cout << wi << endl;
+	pdf = recs[idx].n.dot(wi) * invPI;
+	return recs[idx].material * kd * invPI;
+}
+
 Vec3 path_shade(const Ray ray, const int depth, Vec3 pt, int idx, long long& ray_count) {
 	Vec3 L = Vec3(0,0,0);
 	// if (depth == 0 && separate) {
@@ -313,10 +349,125 @@ Vec3 path_shade(const Ray ray, const int depth, Vec3 pt, int idx, long long& ray
 	}
 }
 
+Vec3 path_shade(const Ray& ray, const int depth, Vec3 pt, int idx, long long& ray_count, int j, int k, float& inv_d, double& min_R) {
+	Vec3 L = Vec3(0,0,0);
+	// if (depth == 0 && separate) {
+	// 	ray_count += area_light_num_rays;
+	// 	L = area_light_shade(pt, idx, area_light_num_rays);
+	// }
+	Vec3 wi;
+	Vec3 wo = ray.d * (-1);
+	float pdf;
+	Vec3 f = sample_f(wo, wi, pdf, pt, idx, j, k);
+	float ndotwi = recs[idx].n.dot(wi);
+	Ray reflected_ray(pt, wi);
+	if (depth + 1 > max_depth)
+		return L;
+	else {
+		ray_count ++;
+		Vec3 next_hit;
+		int next_idx;
+		vector<double> t_arr;
+		for (int i = 0; i < recs.size(); i++) {
+			double t;
+			if (recs[i].hit(reflected_ray,t) == true) {
+				t_arr.push_back(t);
+			}
+			else {
+				t_arr.push_back(DBL_MAX);
+			}
+		}
+		vector<double>::iterator it = min_element(t_arr.begin(),t_arr.end());
+		next_idx = it - t_arr.begin();
+		double t = t_arr[next_idx];
 
+		if (t != DBL_MAX) {
+			inv_d = 1 / (reflected_ray.getPt(t) - pt).len();
+			if ((reflected_ray.getPt(t) - pt).len() < min_R)
+				min_R = (reflected_ray.getPt(t) - pt).len();
+			//hit an object
+			if (next_idx == 0) {
+				//emissive
+				if (depth == 0 && separate) {
+					return L;
+				}
+				else {
+					L = L + color_multiply(f, recs[0].material * 20) * ndotwi/pdf;
+					return L;
+				}
+			}
+			else {
+				//matt
+				next_hit = reflected_ray.getPt(t);
+				L = L + color_multiply(f, path_shade(reflected_ray, depth + 1, next_hit, next_idx, ray_count)) * ndotwi /pdf;
+				return L;
+			}
+		}
+		else {
+			inv_d = 0.0;
+			//escape scene
+			return L;
+		}
+	}
+}
+
+vector<int> bruteforceLookup(Vec3 pt, Vec3 normal) {
+	vector<int> Sp;
+	for (int i = 0; i < cache.size(); i++) {
+		if ((pt - cache[i].p).len() < cache[i].R && normal.dot(cache[i].n) > 0.95 && (pt - cache[i].p).dot(normal + cache[i].n)/2 > -0.01) {
+			if (1 / ((pt - cache[i].p).len() / cache[i].R + sqrt(1 - normal.dot(cache[i].n))) > 0.1)
+				Sp.push_back(i);
+		}
+	}
+	return Sp;
+}
+
+Vec3 irradiance_caching(const Ray& ray, Vec3 pt, Vec3 normal, int idx, long long& ray_count, bool& create, clock_t& time) {
+	vector<int> Sp = bruteforceLookup(pt, normal);
+	if (!Sp.empty()) {
+		Vec3 color = Vec3(0,0,0);
+		float w_denom = 0;
+		for (int i = 0; i < Sp.size(); i++) {
+			float w = 1 / ((pt - cache[Sp[i]].p).len() / cache[Sp[i]].R + sqrt(1 - normal.dot(cache[Sp[i]].n)));
+			if (w > 0.1) {
+				w_denom += w;
+				color = color + cache[Sp[i]].E * w;
+			}
+		}
+		color = color / w_denom;
+		clamp(color);
+		return color;
+	}
+	else {
+		clock_t startTime = clock();
+		create = true;
+		Vec3 color = Vec3(0,0,0);
+		float invD = 0;
+		int count = 0;
+		double min_R = DBL_MAX;
+		for (int j = 0; j < M; j++)
+			for (int k = 0; k < N; k++) {
+				float inv_d;
+				color = color +  path_shade(ray, 0, pt, idx, ray_count, j, k,inv_d, min_R);
+				if (inv_d == 0.0)
+					count ++;
+				invD += inv_d;
+			}
+		color = color / (M*N);
+		clamp(color);
+		Irradiance record(pt,normal,color);
+		//record.R = (M* N-count) / invD;
+		record.R = min_R;
+		// if (record.R < 1.0)
+		// cout << count << endl;
+		cache.push_back(record);
+		time += clock() - startTime;
+		return record.E;
+	}
+}
 
 int main() {
-	clock_t startTime = clock();
+	clock_t time = clock() - clock();
 	long long ray_count = 0;
 
 	Vec3 eye = Vec3(278,273,-800);
@@ -414,7 +565,7 @@ int main() {
 	Vec3 p0_15 = Vec3(423.0,0.0,246.0);
 	recs.push_back(Rectangle(p0_15,a15,b15, Vec3(255,255,255)));
 
-	Viewport vp = Viewport(288,288,2);	
+	Viewport vp = Viewport(576,576,1);	
 	ofstream img ("picture.ppm");
 
 	img << "P3" << endl;
@@ -457,80 +608,98 @@ int main() {
 
 			
 			if (t != DBL_MAX) {
-				if (idx == 0)
+				if (idx == 0) {
 					pixel_value = recs[0].material * ls;
+					clamp(pixel_value);
+					img << pixel_value <<endl;
+				}
 				else {
 					Vec3 pt = ray.getPt(t);
 					ray_count += area_light_num_rays;
 					pixel_value = area_light_shade(pt,idx,area_light_num_rays);
-				}
-			}
-
-			Vec3 temp = Vec3(0,0,0);
-			for (int k = 0; k < sample_per_pixel; k++) {
-				ray_count ++;
-			// 	cout << ray_count << " " << x << " " << y << " " << k << endl;
-				
-				ray.o = eye;
-				if (sample_per_pixel == 1)
-					ray.d = vp.getPixelCenter(x,y,-eye.z);
-				else
-					ray.d = vp.getPixelCenter(x + samples[2*k]-0.5,y+samples[2*k+1]-0.5,-eye.z);
-				ray.d = u * ray.d.x + v * ray.d.y - w * ray.d.z;
-				ray.d = ray.d / ray.d.len();
-			// 	//cout << samples[2*i] << endl;
-
-			// 	vector<double> t_arr;
-				for (int i = 0; i < recs.size(); i++) {
-					double t0;
-					if (recs[i].hit(ray,t0) == true) {
-						t_arr[i] = t0;
+					bool create = false;
+					pixel_value = pixel_value + irradiance_caching(ray, pt, recs[idx].n,idx,ray_count,create,time);
+					if (create) {
+						clamp(pixel_value);
+						img << pixel_value << endl;
+						//img << "255 0 0" << endl;
 					}
 					else {
-						t_arr[i] = DBL_MAX;
+						clamp(pixel_value);
+						img << pixel_value << endl;
 					}
 				}
-				it = min_element(t_arr.begin(),t_arr.end());
-				idx = it - t_arr.begin();
-				t = t_arr[idx];
-
-				// if (t == DBL_MAX)
-				// 	continue;
-				if (t != DBL_MAX) {
-					Vec3 pt = ray.getPt(t);
-			// 		if (separate) {
-			// 			//cout << "not here" << endl;
-					// if (idx == 0) {
-					// 	pixel_value = pixel_value + recs[idx].material * ls;
-					// }
-					if (idx != 0) {
-		// 				//cout << indirect << endl;
-						temp = temp + path_shade(ray, 0, pt, idx, ray_count);
-					}
-				}
-			// 		else {
-			// 			if (idx == 0)
-			// 				pixel_value = pixel_value + recs[idx].material * ls;
-			// 			else {
-			// 				pixel_value = pixel_value + path_shade(ray, 0, pt, idx, ray_count);
-			// 			}
-			// 		}
-
-			// 		/** without shading **/
-			// 		//img << recs[idx].material << endl;
-			// 	}
-			// 	// if (pixel_value.x != 0 || pixel_value.y != 0 || pixel_value.z != 0)
-			// 	// cout << pixel_value << ", " << idx<< endl;
 			}
-			temp = temp / sample_per_pixel;
-			pixel_value = pixel_value + temp;
-			//cout << pixel_value << endl;
-			//cout << max(0,min(255, (int)(pixel_value.x))) << endl;
-			clamp(pixel_value);
-			img << pixel_value << endl;
+			/** only for irradiance caching **/
+			else {
+				img << "0 0 0" << endl;
+			}
+			/** Path tracing **/
+		// 	Vec3 temp = Vec3(0,0,0);
+		// 	for (int k = 0; k < sample_per_pixel; k++) {
+		// 		ray_count ++;
+		// 	// 	cout << ray_count << " " << x << " " << y << " " << k << endl;
+				
+		// 		ray.o = eye;
+		// 		if (sample_per_pixel == 1)
+		// 			ray.d = vp.getPixelCenter(x,y,-eye.z);
+		// 		else
+		// 			ray.d = vp.getPixelCenter(x + samples[2*k]-0.5,y+samples[2*k+1]-0.5,-eye.z);
+		// 		ray.d = u * ray.d.x + v * ray.d.y - w * ray.d.z;
+		// 		ray.d = ray.d / ray.d.len();
+		// 	// 	//cout << samples[2*i] << endl;
+
+		// 	// 	vector<double> t_arr;
+		// 		for (int i = 0; i < recs.size(); i++) {
+		// 			double t0;
+		// 			if (recs[i].hit(ray,t0) == true) {
+		// 				t_arr[i] = t0;
+		// 			}
+		// 			else {
+		// 				t_arr[i] = DBL_MAX;
+		// 			}
+		// 		}
+		// 		it = min_element(t_arr.begin(),t_arr.end());
+		// 		idx = it - t_arr.begin();
+		// 		t = t_arr[idx];
+
+		// 		// if (t == DBL_MAX)
+		// 		// 	continue;
+		// 		if (t != DBL_MAX) {
+		// 			Vec3 pt = ray.getPt(t);
+		// 	// 		if (separate) {
+		// 	// 			//cout << "not here" << endl;
+		// 			// if (idx == 0) {
+		// 			// 	pixel_value = pixel_value + recs[idx].material * ls;
+		// 			// }
+		// 			if (idx != 0) {
+		// // 				//cout << indirect << endl;
+		// 				temp = temp + path_shade(ray, 0, pt, idx, ray_count);
+		// 			}
+		// 		}
+		// 	// 		else {
+		// 	// 			if (idx == 0)
+		// 	// 				pixel_value = pixel_value + recs[idx].material * ls;
+		// 	// 			else {
+		// 	// 				pixel_value = pixel_value + path_shade(ray, 0, pt, idx, ray_count);
+		// 	// 			}
+		// 	// 		}
+
+		// 	// 		/** without shading **/
+		// 	// 		//img << recs[idx].material << endl;
+		// 	// 	}
+		// 	// 	// if (pixel_value.x != 0 || pixel_value.y != 0 || pixel_value.z != 0)
+		// 	// 	// cout << pixel_value << ", " << idx<< endl;
+		// 	}
+		// 	temp = temp / sample_per_pixel;
+		// 	pixel_value = pixel_value + temp;
+		// 	//cout << pixel_value << endl;
+		// 	//cout << max(0,min(255, (int)(pixel_value.x))) << endl;
+		// 	clamp(pixel_value);
+		// 	img << pixel_value << endl;
 		}
 	}
-	cout << ray_count << endl;
+	cout << (double)time / CLOCKS_PER_SEC << endl;
 	//cout << (double)(clock() - startTime) / (CLOCKS_PER_SEC) << " seconds, " << ray_count << " rays" << endl;
 	return 0;
 }
