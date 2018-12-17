@@ -1,0 +1,1 @@
+1. multi-jittered sampling: https://graphics.pixar.com/library/MultiJitteredSampling/paper.pdf
